@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: util/markdown.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: util/markdown.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ * Provides access to Markdown-related functions.
+ * @module jsdoc/util/markdown
+ */
+'use strict';
+
+var env = require('jsdoc/env');
+var logger = require('jsdoc/util/logger');
+var MarkdownIt = require('markdown-it');
+var marked = require('marked');
+var mdnh = require('markdown-it-named-headers');
+var path = require('jsdoc/path');
+var util = require('util');
+
+/**
+ * Enumeration of Markdown parsers that are available.
+ * @enum {String}
+ */
+var parserNames = {
+    /**
+     * The [`markdown-js`](https://github.com/evilstreak/markdown-js) (aka "evilstreak") parser.
+     *
+     * @deprecated Replaced by `markdown-it`.
+     */
+    evilstreak: 'markdownit',
+    /**
+     * The "GitHub-flavored Markdown" parser.
+     *
+     * @deprecated Replaced by `markdown-it`.
+     */
+    gfm: 'markdownit',
+    /**
+     * The `markdown-it` parser.
+     */
+    markdownit: 'markdownit',
+    /**
+     * The [Marked](https://github.com/chjj/marked) parser.
+     *
+     * @deprecated Will be replaced by `markdown-it` in JSDoc 3.7.0.
+     */
+    marked: 'marked'
+};
+
+/**
+ * Escape underscores that occur within an inline tag in order to protect them from the `marked`
+ * parser.
+ *
+ * @param {string} source - The source text to sanitize.
+ * @return {string} The source text, where underscores within inline tags have been protected with a
+ * preceding backslash (e.g., `\_`). The `marked` parser will strip the backslash and protect the
+ * underscore.
+ */
+function escapeUnderscores(source) {
+    return source.replace(/\{@[^}\r\n]+\}/g, function(wholeMatch) {
+        return wholeMatch.replace(/(^|[^\\])_/g, '$1\\_');
+    });
+}
+
+/**
+ * Escape HTTP/HTTPS URLs so that they are not automatically converted to HTML links.
+ *
+ * @param {string} source - The source text to escape.
+ * @return {string} The source text with escape characters added to HTTP/HTTPS URLs.
+ */
+function escapeUrls(source) {
+    return source.replace(/(https?):\/\//g, '$1:\\/\\/');
+}
+
+/**
+ * Unescape HTTP/HTTPS URLs after Markdown parsing is complete.
+ *
+ * @param {string} source - The source text to unescape.
+ * @return {string} The source text with escape characters removed from HTTP/HTTPS URLs.
+ */
+function unescapeUrls(source) {
+    return source.replace(/(https?):\\\/\\\//g, '$1://');
+}
+
+/**
+ * Escape backslashes within inline tags so that they are not stripped.
+ *
+ * @param {string} source - The source text to escape.
+ * @return {string} The source text with backslashes escaped within inline tags.
+ */
+function escapeInlineTagBackslashes(source) {
+    return source.replace(/\{@[^}\r\n]+\}/g, function(wholeMatch) {
+        return wholeMatch.replace(/\\/g, '\\\\');
+    });
+}
+
+/**
+ * Escape characters in text within a code block.
+ *
+ * @param {string} source - The source text to escape.
+ * @return {string} The escaped source text.
+ */
+function escapeCode(source) {
+    return source.replace(/&lt;/g, '&amp;lt;')
+        .replace(/"/g, '&amp;quot;')
+        .replace(/'/g, '&amp;#39;');
+}
+
+/**
+ * Wrap a code snippet in HTML tags that enable syntax highlighting.
+ *
+ * @param {string} code - The code snippet.
+ * @param {string?} language - The language of the code snippet.
+ * @return {string} The wrapped code snippet.
+ */
+function highlight(code, language) {
+    var classString;
+    var langClass = '';
+
+    if (language &amp;&amp; (language !== 'plain')) {
+        langClass = ' lang-' + language;
+    }
+
+    if (language !== 'plain') {
+        classString = util.format(' class="prettyprint source%s"', langClass);
+    }
+    else {
+        classString = ' class="source"';
+    }
+
+    return util.format('&lt;pre%s>&lt;code>%s&lt;/code>&lt;/pre>', classString, escapeCode(code));
+}
+
+/**
+ * Unencode quotes that occur within {@ ... } after the Markdown parser has turned them into HTML
+ * entities.
+ *
+ * @param {string} source - The source text to unencode.
+ * @return {string} The source text with HTML entity `&amp;quot;` converted back to standard quotes.
+ */
+function unencodeQuotes(source) {
+    return source.replace(/\{@[^}\r\n]+\}/g, function(wholeMatch) {
+        return wholeMatch.replace(/&amp;quot;/g, '"');
+    });
+}
+
+/**
+ * Get the appropriate function for applying syntax highlighting to text, based on the user's
+ * Markdown configuration settings.
+ *
+ * @param {Object} conf - The user's Markdown configuration settings.
+ * @return {function} The highlighter function.
+ */
+function getHighlighter(conf) {
+    var highlighter;
+    var highlighterPath;
+
+    switch (typeof conf.highlight) {
+        case 'string':
+            highlighterPath = path.getResourcePath(conf.highlight);
+
+            if (highlighterPath) {
+                highlighter = require(highlighterPath).highlight;
+
+                if (typeof highlighter !== 'function') {
+                    logger.error('The syntax highlighting module "%s" does not assign a method ' +
+                        'to exports.highlight. Using the default syntax highlighter.',
+                    conf.highlight);
+                    highlighter = highlight;
+                }
+            }
+            else {
+                logger.error('Unable to find the syntax highlighting module "%s". Using the ' +
+                    'default syntax highlighter.', conf.highlight);
+                highlighter = highlight;
+            }
+
+            break;
+
+        case 'function':
+            highlighter = conf.highlight;
+
+            break;
+
+        default:
+            highlighter = highlight;
+    }
+
+    return highlighter;
+}
+
+/**
+ * Retrieve a function that accepts a single parameter containing Markdown source. The function uses
+ * the specified parser to transform the Markdown source to HTML, then returns the HTML as a string.
+ *
+ * @private
+ * @param {String} parserName The name of the selected parser.
+ * @param {Object} [conf] Configuration for the selected parser, if any.
+ * @returns {Function} A function that accepts Markdown source, feeds it to the selected parser, and
+ * returns the resulting HTML.
+ */
+function getParseFunction(parserName, conf) {
+    var highlighter;
+    var parserFunction;
+    var renderer;
+
+    conf = conf || {};
+    highlighter = getHighlighter(conf);
+
+    switch (parserName) {
+        case parserNames.marked:
+            if (conf.hardwrap) {
+                marked.setOptions({breaks: true});
+            }
+
+            // Marked generates an "id" attribute for headers; this custom renderer suppresses it
+            renderer = new marked.Renderer();
+
+            if (!conf.idInHeadings) {
+                renderer.heading = function(text, level) {
+                    return util.format('&lt;h%s>%s&lt;/h%s>', level, text, level);
+                };
+            }
+
+            renderer.code = highlighter;
+
+            parserFunction = function(source) {
+                var result;
+
+                source = escapeUnderscores(source);
+                source = escapeUrls(source);
+
+                result = marked(source, { renderer: renderer })
+                    .replace(/\s+$/, '')
+                    .replace(/&amp;#39;/g, "'");
+
+                result = unescapeUrls(result);
+                result = unencodeQuotes(result);
+
+                return result;
+            };
+            parserFunction._parser = parserNames.marked;
+
+            return parserFunction;
+
+        case parserNames.markdownit:
+            renderer = new MarkdownIt({
+                breaks: Boolean(conf.hardwrap),
+                highlight: highlighter,
+                html: true
+            });
+
+            if (conf.idInHeadings) {
+                renderer.use(mdnh);
+            }
+
+            parserFunction = function(source) {
+                var result;
+
+                source = escapeUrls(source);
+                source = escapeInlineTagBackslashes(source);
+
+                result = renderer.render(source)
+                    .replace(/\s+$/, '')
+                    .replace(/&amp;#39;/g, "'");
+
+                result = unescapeUrls(result);
+                result = unencodeQuotes(result);
+
+                return result;
+            };
+            parserFunction._parser = parserNames.markdownit;
+
+            return parserFunction;
+
+        default:
+            logger.error('Unrecognized Markdown parser "%s". Markdown support is disabled.',
+                parserName);
+
+            return undefined;
+    }
+}
+
+/**
+ * Retrieve a Markdown parsing function based on the value of the `conf.json` file's
+ * `env.conf.markdown` property. The parsing function accepts a single parameter containing Markdown
+ * source. The function uses the parser specified in `conf.json` to transform the Markdown source to
+ * HTML, then returns the HTML as a string.
+ *
+ * @returns {function} A function that accepts Markdown source, feeds it to the selected parser, and
+ * returns the resulting HTML.
+ */
+exports.getParser = function() {
+    var conf = env.conf.markdown;
+    var parser = (conf &amp;&amp; conf.parser) ? parserNames[conf.parser] : parserNames.markdownit;
+
+    return getParseFunction(parser, conf);
+};
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Modules</h3><ul><li><a href="module-jsdoc_opts_argparser.html">jsdoc/opts/argparser</a></li><li><a href="module-jsdoc_opts_args.html">jsdoc/opts/args</a></li><li><a href="module-jsdoc_src_astnode.html">jsdoc/src/astnode</a></li><li><a href="module-jsdoc_src_filter.html">jsdoc/src/filter</a></li><li><a href="module-jsdoc_src_handlers.html">jsdoc/src/handlers</a></li><li><a href="module-jsdoc_src_parser.html">jsdoc/src/parser</a></li><li><a href="module-jsdoc_src_scanner.html">jsdoc/src/scanner</a></li><li><a href="module-jsdoc_src_visitor.html">jsdoc/src/visitor</a></li><li><a href="module-jsdoc_src_walker.html">jsdoc/src/walker</a></li><li><a href="module-jsdoc_tag_dictionary.html">jsdoc/tag/dictionary</a></li><li><a href="module-jsdoc_tag_dictionary_definitions.html">jsdoc/tag/dictionary/definitions</a></li><li><a href="module-jsdoc_tag_inline.html">jsdoc/tag/inline</a></li><li><a href="module-jsdoc_tag_type.html">jsdoc/tag/type</a></li><li><a href="module-jsdoc_tag_validator.html">jsdoc/tag/validator</a></li><li><a href="module-jsdoc_tutorial_resolver.html">jsdoc/tutorial/resolver</a></li><li><a href="module-jsdoc_util_dumper.html">jsdoc/util/dumper</a></li><li><a href="module-jsdoc_util_error.html">jsdoc/util/error</a></li><li><a href="module-jsdoc_util_logger.html">jsdoc/util/logger</a></li><li><a href="module-jsdoc_util_markdown.html">jsdoc/util/markdown</a></li><li><a href="module-jsdoc_util_templateHelper.html">jsdoc/util/templateHelper</a></li></ul><h3>Classes</h3><ul><li><a href="module-jsdoc_opts_argparser.html">jsdoc/opts/argparser</a></li><li><a href="module-jsdoc_src_filter.Filter.html">Filter</a></li><li><a href="module-jsdoc_src_parser.Parser.html">Parser</a></li><li><a href="module-jsdoc_src_scanner.Scanner.html">Scanner</a></li><li><a href="module-jsdoc_tag_dictionary.Dictionary.html">Dictionary</a></li></ul><h3>Events</h3><ul><li><a href="module-jsdoc_src_parser.Parser.html#.event:jsdocCommentFound">jsdocCommentFound</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc3/jsdoc">JSDoc 3.6.0-dev</a> on Fri Sep 14 2018 15:06:08 GMT-0700 (PDT)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

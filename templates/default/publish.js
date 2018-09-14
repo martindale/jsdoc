@@ -402,6 +402,7 @@ function buildNav(members) {
 /**
     @param {TAFFY} taffyData See <http://taffydb.com/>.
     @param {object} opts
+    @param {object} opts.name Sets the homepage name in the default template.
     @param {Tutorial} tutorials
  */
 exports.publish = function(taffyData, opts, tutorials) {
