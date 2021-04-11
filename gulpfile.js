@@ -1,12 +1,7 @@
-/* eslint max-nested-callbacks: 0 */
-'use strict';
-
-var eslint = require('gulp-eslint');
-var exec = require('child_process').exec;
-var gulp = require('gulp');
-var jsonEditor = require('gulp-json-editor');
-var path = require('path');
-var util = require('util');
+const eslint = require('gulp-eslint');
+const { exec } = require('child_process');
+const gulp = require('gulp');
+const path = require('path');
 
 function execCb(cb, err, stdout, stderr) {
     console.log(stdout);
@@ -14,49 +9,43 @@ function execCb(cb, err, stdout, stderr) {
     cb(err);
 }
 
-var options = {
+const options = {
     coveragePaths: [
         '*.js',
-        'lib/**/*.js',
-        'plugins/*.js'
+        'packages/**/*.js',
+        '!packages/**/test/*.js',
+        '!packages/**/test/**/*.js',
+        '!packages/**/static/*.js'
     ],
     lintPaths: [
         '*.js',
-        'lib/**/*.js',
-        'plugins/*.js',
-        'templates/default/*.js',
-        'templates/haruki/*.js',
-        'test/specs/**/*.js'
+        'packages/**/*.js',
+        '!packages/**/static/*.js'
     ],
-    nodeBin: path.resolve(__dirname, './jsdoc.js'),
+    nodeBin: path.resolve(__dirname, './packages/jsdoc/jsdoc.js'),
     nodePath: process.execPath
 };
 
-gulp.task('bump', function() {
-    gulp.src('./package.json')
-        .pipe(jsonEditor({
-            revision: String( Date.now() )
-        }))
-        .pipe(gulp.dest('./'));
-});
+function coverage(cb) {
+    const cmd = `./node_modules/.bin/nyc --reporter=html ${options.nodeBin} -T`;
 
-gulp.task('coverage', function(cb) {
-    var cmd = util.format('./node_modules/.bin/nyc --reporter=html %s -T', options.nodeBin);
+    return exec(cmd, execCb.bind(null, cb));
+}
 
-    exec(cmd, execCb.bind(null, cb));
-});
-
-gulp.task('lint', function() {
+function lint() {
     return gulp.src(options.lintPaths)
         .pipe(eslint())
         .pipe(eslint.formatEach())
-        .pipe(eslint.failOnError());
-});
+        .pipe(eslint.failAfterError());
+}
 
-gulp.task('test', function(cb) {
-    var cmd = util.format('%s "%s" -T', options.nodePath, options.nodeBin);
+function test(cb) {
+    const cmd = `${options.nodePath} "${options.nodeBin}" -T`;
 
-    exec(cmd, execCb.bind(null, cb));
-});
+    return exec(cmd, execCb.bind(null, cb));
+}
 
-gulp.task('default', ['lint', 'test']);
+exports.coverage = coverage;
+exports.default = gulp.series(lint, test);
+exports.lint = lint;
+exports.test = test;
